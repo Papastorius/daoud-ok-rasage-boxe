@@ -47,12 +47,14 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.1, 3.8);
 
-  log('Init renderer...');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const renderer = new THREE.WebGPURenderer({ antialias: true });
   await renderer.init();
+  renderer.setPixelRatio(dpr);
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
+  renderer.domElement.style.touchAction = 'none';
   log('Renderer OK');
 
   // Cartoon lighting
@@ -70,6 +72,13 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
   const raycaster = new THREE.Raycaster();
   const ndc       = new THREE.Vector2();
+
+  // Reusable temps — never allocate these inside hot loops
+  const _v1        = new THREE.Vector3();
+  const _v2        = new THREE.Vector3();
+  const _headPos   = new THREE.Vector3();
+  const _baseColor = new THREE.Color();
+  const _white     = new THREE.Color(0xffffff);
 
   // ====== LOAD GLTF ======
   let faceMesh = null;
@@ -249,8 +258,9 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
       sprite.renderOrder = 2500;
       scene.add(sprite);
 
-      const rand    = new THREE.Vector3().randomDirection();
-      const tangent = rand.sub(n.clone().multiplyScalar(rand.dot(n))).normalize();
+      _v2.randomDirection();
+      const dot     = _v2.dot(n);
+      const tangent = _v2.sub(n.clone().multiplyScalar(dot)).normalize();
       const speed   = THREE.MathUtils.lerp(PART_SPEED_MIN, PART_SPEED_MAX, Math.random());
       const vel     = n.clone().multiplyScalar(speed * 0.45).addScaledVector(tangent, speed);
 
@@ -279,36 +289,40 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   }
 
   // ====== ONOMATOPOEIA ======
-  const WORDS  = ['POW!', 'BAM!', 'SMACK!', 'WHAM!', 'KA-POW!', 'BOUM!', 'CRACK!'];
-  const COLORS = ['#FFE500', '#FF4400', '#00EEFF', '#FF00BB', '#44FF22', '#FF8800'];
-
-  function makeOnomaSprite(word) {
-    const col  = COLORS[Math.floor(Math.random() * COLORS.length)];
-    const c    = document.createElement('canvas');
-    c.width = 512; c.height = 256;
-    const g    = c.getContext('2d');
-    const size = Math.min(160, Math.floor(560 / word.length));
-    g.font      = `bold ${size}px Impact, Arial Black, sans-serif`;
+  // Pre-bake textures at startup: 256×128 canvas (4× less memory than 512×256)
+  const WORD_PALETTE = {
+    'POW!': '#FFE500', 'BAM!': '#FF4400', 'SMACK!': '#00EEFF',
+    'WHAM!': '#FF00BB', 'KA-POW!': '#44FF22', 'BOUM!': '#FF8800', 'CRACK!': '#ffffff',
+  };
+  const WORDS = Object.keys(WORD_PALETTE);
+  const onoma_mat = {};  // word → SpriteMaterial (shared, never recreated)
+  for (const [word, col] of Object.entries(WORD_PALETTE)) {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 128;
+    const g = c.getContext('2d');
+    const fs = Math.min(80, Math.floor(280 / word.length));
+    g.font = `bold ${fs}px Impact, Arial Black, sans-serif`;
     g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.lineJoin  = 'round';
-    g.strokeStyle = '#000'; g.lineWidth = 18; g.strokeText(word, 256, 128);
-    g.fillStyle   = col;                      g.fillText(word, 256, 128);
+    g.lineJoin = 'round';
+    g.strokeStyle = '#000'; g.lineWidth = 10; g.strokeText(word, 128, 64);
+    g.fillStyle = col;                        g.fillText(word, 128, 64);
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    return new THREE.Sprite(new THREE.SpriteMaterial({
-      map: tex, depthTest: false, transparent: true, toneMapped: false,
-    }));
+    onoma_mat[word] = new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, toneMapped: false });
   }
 
   const onomaList = [];
+  const onomaPool = [];  // recycled sprites
 
   function spawnOnoma(pt, normal) {
     const word   = WORDS[Math.floor(Math.random() * WORDS.length)];
-    const sprite = makeOnomaSprite(word);
-    sprite.position.copy(pt)
-      .addScaledVector(normal, 0.25 + Math.random() * 0.2)
-      .add(new THREE.Vector3((Math.random() - 0.5) * 0.5, 0.15 + Math.random() * 0.25, 0));
+    const sprite = onomaPool.length > 0 ? onomaPool.pop() : new THREE.Sprite();
+    sprite.material = onoma_mat[word];
+
+    _v1.set((Math.random() - 0.5) * 0.5, 0.15 + Math.random() * 0.25, 0);
+    sprite.position.copy(pt).addScaledVector(normal, 0.25 + Math.random() * 0.2).add(_v1);
     sprite.scale.set(0.01, 0.005, 1);
+    sprite.material.opacity = 1;
     sprite.renderOrder = 3000;
     scene.add(sprite);
     onomaList.push({ sprite, ttl: 0.85, maxTtl: 0.85 });
@@ -333,8 +347,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
       if (o.ttl <= 0) {
         o.sprite.parent?.remove(o.sprite);
-        o.sprite.material.map?.dispose();
-        o.sprite.material.dispose();
+        if (onomaPool.length < 20) onomaPool.push(o.sprite);
         onomaList.splice(i, 1);
       }
     }
@@ -360,10 +373,9 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     headScaleCur += headScaleVel * dt;
     headRoot.scale.setScalar(headScaleCur);
 
-    // Position recoil spring
-    const rAcc = headRecoilPos.clone().multiplyScalar(-RECOIL_K)
-                   .addScaledVector(headRecoilVel, -RECOIL_D);
-    headRecoilVel.addScaledVector(rAcc, dt);
+    // Position recoil spring (reuse _v1, no allocation)
+    _v1.copy(headRecoilPos).multiplyScalar(-RECOIL_K).addScaledVector(headRecoilVel, -RECOIL_D);
+    headRecoilVel.addScaledVector(_v1, dt);
     headRecoilPos.addScaledVector(headRecoilVel, dt);
     headRoot.position.set(0, 0.55, -0.25).add(headRecoilPos);
   }
@@ -419,7 +431,14 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
   function scheduleBeats() {
     if (!rhythmOn) return;
-    const horizon = audioCtx.currentTime + LOOK_AHEAD + 0.15;
+    const now     = audioCtx.currentTime;
+    const horizon = now + LOOK_AHEAD + 0.15;
+
+    // Purge beats older than 3 seconds to prevent array growing unbounded
+    let cut = 0;
+    while (cut < beats.length && beats[cut].time < now - 3) cut++;
+    if (cut > 0) beats.splice(0, cut);
+
     while (nextBeatT < horizon) {
       scheduleClick(nextBeatT);
       beats.push({ time: nextBeatT, state: 'pending' });
@@ -427,26 +446,23 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     }
   }
 
-  // Beat ring (CSS overlay — reliable on all renderers)
-  const beatRing = document.createElement('div');
-  Object.assign(beatRing.style, {
-    position: 'fixed', borderRadius: '50%',
-    border: '5px solid #FFE500',
-    boxShadow: '0 0 18px #FFE500',
-    transform: 'translate(-50%, -50%)',
-    pointerEvents: 'none', zIndex: '4000',
-    opacity: '0', left: '50%', top: '44%',
-  });
-  document.body.appendChild(beatRing);
+  // Beat ring — canvas overlay (zero DOM reflow, one draw call per frame)
+  const ringCv  = document.createElement('canvas');
+  ringCv.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:4000;';
+  ringCv.width  = Math.round(innerWidth  * dpr);
+  ringCv.height = Math.round(innerHeight * dpr);
+  document.body.appendChild(ringCv);
+  const ringCtx = ringCv.getContext('2d');
 
   function updateBeatRing() {
+    ringCtx.clearRect(0, 0, ringCv.width, ringCv.height);
     if (!rhythmOn) return;
     const now  = audioCtx.currentTime;
     const next = beats.find(b => b.state === 'pending');
-    if (!next) { beatRing.style.opacity = '0'; return; }
+    if (!next) return;
 
     const until = next.time - now;
-    if (until > LOOK_AHEAD) { beatRing.style.opacity = '0'; return; }
+    if (until > LOOK_AHEAD) return;
 
     if (until < -(GOOD_WIN + 0.05)) {
       if (next.state === 'pending') {
@@ -454,18 +470,28 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
         breakCombo();
         showJudgment('MISS', '#ff2200');
       }
-      beatRing.style.opacity = '0';
       return;
     }
 
-    const t    = Math.max(0, 1 - until / LOOK_AHEAD);   // 0→1 as beat approaches
-    const size = Math.round(220 - t * 160);              // 220px → 60px
-    const hue  = until < 0.25 ? 20 : 50;               // shifts orange near beat
-    beatRing.style.width   = size + 'px';
-    beatRing.style.height  = size + 'px';
-    beatRing.style.opacity = String(Math.min(1, t * 2));
-    beatRing.style.borderColor = `hsl(${hue},100%,55%)`;
-    beatRing.style.boxShadow   = `0 0 ${12 + t * 20}px hsl(${hue},100%,55%)`;
+    const t      = Math.max(0, 1 - until / LOOK_AHEAD);
+    const radius = (110 - t * 80) * dpr;                 // 110→30 logical px
+    const hue    = until < 0.25 ? 20 : 50;
+    const alpha  = Math.min(1, t * 2);
+    const glow   = (12 + t * 20) * dpr;
+    const color  = `hsl(${hue},100%,55%)`;
+    const cx     = ringCv.width  * 0.5;
+    const cy     = ringCv.height * 0.44;
+
+    ringCtx.save();
+    ringCtx.globalAlpha = alpha;
+    ringCtx.strokeStyle = color;
+    ringCtx.lineWidth   = 5 * dpr;
+    ringCtx.shadowBlur  = glow;
+    ringCtx.shadowColor = color;
+    ringCtx.beginPath();
+    ringCtx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ringCtx.stroke();
+    ringCtx.restore();
   }
 
   // Judgment
@@ -548,17 +574,16 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     camera.fov = camFOVCur;
     camera.updateProjectionMatrix();
 
-    // Background: flash white on beat, then back to combo color
+    // Background: flash white on beat, then back to combo color (reuse _baseColor/_white)
     const sinceBeat = now - lastBeatVizT;
     const flash     = Math.max(0, 1 - sinceBeat / 0.1);
 
-    let base;
-    if      (combo >= 12) base = new THREE.Color(0xff2200);
-    else if (combo >=  8) base = new THREE.Color(0xff6600);
-    else if (combo >=  4) base = new THREE.Color(0xffaa00);
-    else                  base = new THREE.Color(0xffdd00);
+    if      (combo >= 12) _baseColor.setHex(0xff2200);
+    else if (combo >=  8) _baseColor.setHex(0xff6600);
+    else if (combo >=  4) _baseColor.setHex(0xffaa00);
+    else                  _baseColor.setHex(0xffdd00);
 
-    scene.background.lerpColors(base, new THREE.Color(0xffffff), flash * 0.4);
+    scene.background.lerpColors(_baseColor, _white, flash * 0.4);
   }
 
   // Orbital dazed stars
@@ -587,15 +612,14 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     }
 
     if (!headRoot || orbitalStars.length === 0) return;
-    const hp = new THREE.Vector3();
-    headRoot.getWorldPosition(hp);
+    headRoot.getWorldPosition(_headPos);
 
     for (const s of orbitalStars) {
       s.angle += dt * 3.5;
       s.sprite.position.set(
-        hp.x + Math.cos(s.angle) * 0.55,
-        hp.y + 0.35 + Math.sin(s.angle * 1.3) * 0.12,
-        hp.z + Math.sin(s.angle) * 0.25,
+        _headPos.x + Math.cos(s.angle) * 0.55,
+        _headPos.y + 0.35 + Math.sin(s.angle * 1.3) * 0.12,
+        _headPos.z + Math.sin(s.angle) * 0.25,
       );
     }
   }
@@ -807,9 +831,15 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     }
   });
 
+  let _lastMoveFrame = 0;
   renderer.domElement.addEventListener('pointermove', (e) => {
     if (e.pointerType === 'touch' && activeTouches.size >= 2) return;
-    if (isPunching) punchAt(e.clientX, e.clientY);
+    if (!isPunching) return;
+    // Throttle: at most one raycast per ~3 rendered frames (~50ms) on mobile
+    const frame = Math.floor(performance.now() / 50);
+    if (frame === _lastMoveFrame) return;
+    _lastMoveFrame = frame;
+    punchAt(e.clientX, e.clientY);
   });
 
   function endPointer(e) {
@@ -829,6 +859,8 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    ringCv.width  = Math.round(innerWidth  * dpr);
+    ringCv.height = Math.round(innerHeight * dpr);
   });
 
   // ====== LOOP ======
