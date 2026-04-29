@@ -3,153 +3,152 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 (async function () {
+
   // ====== PARAMS ======
-  const DECAL_RADIUS_WORLD = 0.12; // m
-  const DECAL_TTL = 6.0;           // s
-  const DECAL_FADE = 0.9;          // e^{-DECAL_FADE * t}
-  const MAX_DECALS = 512;
+  const DECAL_RADIUS  = 0.18;
+  const DECAL_TTL     = 5.0;
+  const DECAL_FADE    = 1.0;
+  const MAX_DECALS    = 256;
 
-  const MAX_PARTS = 600;
-  const PARTS_PER_HIT = 40;
-  const PART_TTL = 0.9;
-  const PART_SPEED_MIN = 1.2;
-  const PART_SPEED_MAX = 2.4;
-  const PART_DRAG = 0.90;
-  const PART_GRAVITY = new THREE.Vector3(0, -2.0, 0);
+  const MAX_PARTS      = 400;
+  const PARTS_PER_HIT  = 28;
+  const PART_TTL       = 0.85;
+  const PART_SPEED_MIN = 2.2;
+  const PART_SPEED_MAX = 4.5;
+  const PART_DRAG      = 0.87;
+  const PART_GRAVITY   = new THREE.Vector3(0, -5.0, 0);
 
-  const DEBUG_HITS = true;   // <-- mets false pour couper le marqueur
+  // Spring squash & stretch
+  const HEAD_BASE_SCALE = 7.0;
+  let   headScaleCur    = HEAD_BASE_SCALE;
+  let   headScaleVel    = 0.0;
+  const SPRING_K        = 320;
+  const SPRING_D        = 17;
 
-  // ====== SCÈNE / CAM / RDR ======
+  // Recoil position spring
+  const headRecoilPos = new THREE.Vector3();
+  const headRecoilVel = new THREE.Vector3();
+  const RECOIL_K      = 260;
+  const RECOIL_D      = 14;
+
+  // ====== SCENE ======
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf4f8ff);
+  scene.background = new THREE.Color(0xffdd00);  // cartoon yellow
 
-  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+  const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.1, 3.8);
 
   const renderer = new THREE.WebGPURenderer({ antialias: true });
   await renderer.init();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
-  const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-  dir.position.set(4, 8, 6);
-  scene.add(dir);
+  // Cartoon lighting
+  scene.add(new THREE.AmbientLight(0xffffff, 0.12));
+  const sun = new THREE.DirectionalLight(0xfff5cc, 2.2);
+  sun.position.set(4, 8, 6);
+  scene.add(sun);
+  const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
+  fill.position.set(-4, 1, -3);
+  scene.add(fill);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
   const raycaster = new THREE.Raycaster();
-  const ndc = new THREE.Vector2();
+  const ndc       = new THREE.Vector2();
 
-  // ====== VISAGE (soldier_head seulement) ======
+  // ====== LOAD GLTF ======
   let faceMesh = null;
   let headRoot = null;
-  const loader = new GLTFLoader();
 
-  loader.load(
-    './assets/head_expressions.glb',
-    (gltf) => {
-      const headSrc = gltf.scene.getObjectByName('soldier_head');
-      if (!headSrc) { console.error('soldier_head introuvable'); return; }
+  new GLTFLoader().load('./assets/head_expressions.glb', (gltf) => {
+    const headSrc = gltf.scene.getObjectByName('soldier_head');
+    if (!headSrc) { console.error('soldier_head introuvable'); return; }
 
-      headRoot = new THREE.Group();
-      headRoot.position.set(0, 0.55, -0.25);
-      headRoot.scale.set(7, 7, 7);
-      scene.add(headRoot);
+    headRoot = new THREE.Group();
+    headRoot.position.set(0, 0.55, -0.25);
+    headRoot.scale.setScalar(HEAD_BASE_SCALE);
+    scene.add(headRoot);
 
-      const headClone = headSrc.clone(true);
-      headRoot.add(headClone);
+    const headClone = headSrc.clone(true);
+    headRoot.add(headClone);
 
-      headClone.traverse(n => { if (n.isMesh && !faceMesh) faceMesh = n; });
-      if (!faceMesh) { console.error('Aucun mesh dans soldier_head'); return; }
+    headClone.traverse(n => {
+      if (!n.isMesh) return;
+      if (!faceMesh) faceMesh = n;
 
-      const worldPos = new THREE.Vector3();
-      faceMesh.getWorldPosition(worldPos);
-      controls.target.copy(worldPos);
-      controls.update();
+      const srcMat = Array.isArray(n.material) ? n.material[0] : n.material;
+      n.material = new THREE.MeshToonMaterial({
+        color: srcMat?.color?.clone() ?? new THREE.Color(0xe0b48a),
+        map:   srcMat?.map   ?? null,
+      });
 
-      console.log('soldier_head isolé prêt');
-    },
-    (xhr) => console.log(`Chargement GLTF : ${(xhr.loaded / xhr.total * 100).toFixed(1)}%`),
-    (err) => console.error('Erreur GLTF :', err)
-  );
+      // Black outline via inverted hull
+      const outline = new THREE.Mesh(
+        n.geometry,
+        new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.BackSide })
+      );
+      outline.scale.setScalar(1.045);
+      outline.renderOrder = -1;
+      n.add(outline);
+    });
 
-  // ====== TEXTURE DÉCAL ======
-  function makeDecalTexture(size = 256) {
+    if (!faceMesh) { console.error('Aucun mesh dans soldier_head'); return; }
+    const wp = new THREE.Vector3();
+    faceMesh.getWorldPosition(wp);
+    controls.target.copy(wp);
+    controls.update();
+  }, null, (e) => console.error('GLTF:', e));
+
+  // ====== DECAL TEXTURE (cartoon blood) ======
+  function makeDecalTex(size = 256) {
     const c = document.createElement('canvas');
     c.width = c.height = size;
     const g = c.getContext('2d');
-
-    g.clearRect(0, 0, size, size);
-    const cx = size * 0.5, cy = size * 0.5, r = size * 0.5;
-    const grd = g.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grd.addColorStop(0.00, 'rgba(210,30,30,0.96)');
-    grd.addColorStop(0.35, 'rgba(180,20,20,0.82)');
-    grd.addColorStop(0.70, 'rgba(120,10,10,0.45)');
-    grd.addColorStop(1.00, 'rgba(0,0,0,0.00)');
-    g.fillStyle = grd;
-    g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
-
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    tex.needsUpdate = true;
-    return tex;
+    const cx = size / 2, r = size * 0.44;
+    const gr = g.createRadialGradient(cx, cx, 0, cx, cx, r);
+    gr.addColorStop(0.00, 'rgba(220,20,20,1)');
+    gr.addColorStop(0.50, 'rgba(170, 8, 8,0.9)');
+    gr.addColorStop(0.82, 'rgba( 90, 0, 0,0.5)');
+    gr.addColorStop(1.00, 'rgba(  0, 0, 0,0)');
+    g.fillStyle = gr;
+    g.beginPath(); g.arc(cx, cx, r, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#300000'; g.lineWidth = 3;
+    g.beginPath(); g.arc(cx, cx, r * 0.72, 0, Math.PI * 2); g.stroke();
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
   }
-  const decalTexture = makeDecalTexture();
+  const decalTex = makeDecalTex();
 
-  // ====== DÉCALS WORLD-SPACE ======
-  const planeGeo = new THREE.PlaneGeometry(1, 1); // normal +Z
-  function makeDecalMaterial() {
-    return new THREE.MeshBasicMaterial({
-      map: decalTexture,
-      transparent: true,
-      opacity: 1.0,
-      // 🔒 Toujours visible :
-      depthTest: false,       // <— clé anti-“caché”
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      blending: THREE.NormalBlending,
-      polygonOffset: true,
-      polygonOffsetFactor: -2,
-      polygonOffsetUnits: -2,
-      toneMapped: false
+  // ====== DECALS ======
+  const planeGeo = new THREE.PlaneGeometry(1, 1);
+  const decals   = [];
+
+  function spawnDecal(pt, normal) {
+    const mat = new THREE.MeshBasicMaterial({
+      map: decalTex, transparent: true, opacity: 1,
+      depthTest: false, depthWrite: false,
+      side: THREE.DoubleSide, toneMapped: false,
     });
-  }
-
-  const decals = []; // {mesh, ttl, baseOpacity}
-  function spawnDecal(worldPoint, worldNormal, radius = DECAL_RADIUS_WORLD) {
-    if (!headRoot) return;
-
-    const mat = makeDecalMaterial();
     const m = new THREE.Mesh(planeGeo, mat);
-
-    // +Z → normale
-    const z = new THREE.Vector3(0, 0, 1);
-    const n = worldNormal.clone().normalize();
-    const q = new THREE.Quaternion().setFromUnitVectors(z, n);
-    // rotation aléatoire autour de la normale
-    const qSpin = new THREE.Quaternion().setFromAxisAngle(n, Math.random() * Math.PI * 2);
-    q.multiply(qSpin);
+    const n = normal.clone().normalize();
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    q.multiply(new THREE.Quaternion().setFromAxisAngle(n, Math.random() * Math.PI * 2));
     m.quaternion.copy(q);
-
-    // Offset fort pour qu’il soit décollé de la peau
-    const safeOffset = Math.max(0.001, radius * 0.5);
-    m.position.copy(worldPoint).addScaledVector(n, safeOffset);
-
-    m.scale.setScalar(radius * 2);
-    m.renderOrder = 2000; // très après
-
+    m.position.copy(pt).addScaledVector(n, 0.018);
+    m.scale.setScalar(DECAL_RADIUS * 2);
+    m.renderOrder = 2000;
     scene.add(m);
-    decals.push({ mesh: m, ttl: DECAL_TTL, baseOpacity: 1.0 });
+    decals.push({ mesh: m, ttl: DECAL_TTL });
 
     if (decals.length > MAX_DECALS) {
       const old = decals.shift();
       old.mesh.parent?.remove(old.mesh);
-      old.mesh.geometry?.dispose();
-      old.mesh.material?.dispose?.();
+      old.mesh.material.dispose();
     }
   }
 
@@ -157,259 +156,301 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     for (let i = decals.length - 1; i >= 0; i--) {
       const d = decals[i];
       d.ttl -= dt;
-      const t = Math.max(0, d.ttl);
-      const alpha = Math.exp(-DECAL_FADE * (DECAL_TTL - t));
-      d.mesh.material.opacity = d.baseOpacity * alpha;
-
-      if (t <= 0) {
+      d.mesh.material.opacity = Math.exp(-DECAL_FADE * (DECAL_TTL - Math.max(0, d.ttl)));
+      if (d.ttl <= 0) {
         d.mesh.parent?.remove(d.mesh);
+        d.mesh.material.dispose();
         decals.splice(i, 1);
-        d.mesh.geometry?.dispose();
-        d.mesh.material?.dispose?.();
       }
     }
   }
 
-  // ====== PARTICULES (billboard) ======
-  const partGeom = new THREE.PlaneGeometry(0.06, 0.06);
-  const partMat = new THREE.MeshBasicMaterial({
-    color: 0xcc1100,
-    transparent: true,
-    opacity: 0.95,
-    depthWrite: false,
-    side: THREE.FrontSide,
-    alphaTest: 0.02,
-    toneMapped: false
+  // ====== STAR TEXTURE ======
+  function makeStarTex() {
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const g = c.getContext('2d');
+    g.clearRect(0, 0, 64, 64);
+    g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i * Math.PI / 5) - Math.PI / 2;
+      const r = i % 2 === 0 ? 28 : 11;
+      i === 0 ? g.moveTo(32 + r * Math.cos(a), 32 + r * Math.sin(a))
+              : g.lineTo(32 + r * Math.cos(a), 32 + r * Math.sin(a));
+    }
+    g.closePath();
+    g.fillStyle   = '#FFE500';
+    g.strokeStyle = '#FF6600';
+    g.lineWidth   = 3;
+    g.fill(); g.stroke();
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  // ====== PARTICLES (stars) ======
+  const partGeo  = new THREE.PlaneGeometry(0.09, 0.09);
+  const partMat  = new THREE.MeshBasicMaterial({
+    map: makeStarTex(), transparent: true, opacity: 1,
+    depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.05, toneMapped: false,
   });
-  const partMesh = new THREE.InstancedMesh(partGeom, partMat, MAX_PARTS);
+  const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
+  const partMesh   = new THREE.InstancedMesh(partGeo, partMat, MAX_PARTS);
   partMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  for (let i = 0; i < MAX_PARTS; i++) partMesh.setMatrixAt(i, zeroMatrix);
+  partMesh.instanceMatrix.needsUpdate = true;
   scene.add(partMesh);
 
-  const pPos = Array(MAX_PARTS).fill(0).map(() => new THREE.Vector3());
-  const pVel = Array(MAX_PARTS).fill(0).map(() => new THREE.Vector3());
-  const pSpin = new Float32Array(MAX_PARTS).fill(0);
-  const pTTL  = new Float32Array(MAX_PARTS).fill(0);
-  let pCursor = 0;
+  const pPos    = Array.from({ length: MAX_PARTS }, () => new THREE.Vector3());
+  const pVel    = Array.from({ length: MAX_PARTS }, () => new THREE.Vector3());
+  const pSpin   = new Float32Array(MAX_PARTS);
+  const pTTL    = new Float32Array(MAX_PARTS);
+  let   pCursor = 0;
 
-  function spawnImpactParticles(point, normal, count) {
-    const n = normal ? normal.clone().normalize() : new THREE.Vector3(0, 1, 0);
+  function spawnParticles(pt, normal, count) {
+    const n = normal.clone().normalize();
     for (let i = 0; i < count; i++) {
       const idx = pCursor++ % MAX_PARTS;
-      pPos[idx].copy(point).addScaledVector(n, 0.01);
-      const randDir = new THREE.Vector3().randomDirection();
-      const tangent = randDir.sub(n.clone().multiplyScalar(randDir.dot(n))).normalize();
-      const speed = THREE.MathUtils.lerp(PART_SPEED_MIN, PART_SPEED_MAX, Math.random());
-      pVel[idx].copy(n).multiplyScalar(speed * 0.6).addScaledVector(tangent, speed * 0.8);
+      pPos[idx].copy(pt).addScaledVector(n, 0.02);
+      const rand    = new THREE.Vector3().randomDirection();
+      const tangent = rand.sub(n.clone().multiplyScalar(rand.dot(n))).normalize();
+      const speed   = THREE.MathUtils.lerp(PART_SPEED_MIN, PART_SPEED_MAX, Math.random());
+      pVel[idx].copy(n).multiplyScalar(speed * 0.45).addScaledVector(tangent, speed);
       pSpin[idx] = Math.random() * Math.PI * 2;
-      pTTL[idx] = PART_TTL;
+      pTTL[idx]  = PART_TTL;
     }
   }
 
   function updateParticles(dt) {
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const qBill = new THREE.Quaternion();
-    const qSpin = new THREE.Quaternion();
+    const m    = new THREE.Matrix4();
+    const q    = new THREE.Quaternion();
+    const Z    = new THREE.Vector3(0, 0, 1);
     const toCam = new THREE.Vector3();
-    const Z = new THREE.Vector3(0, 0, 1);
-
-    let anyAlive = false;
 
     for (let i = 0; i < MAX_PARTS; i++) {
-      if (pTTL[i] <= 0) continue;
-      anyAlive = true;
+      if (pTTL[i] <= 0) { partMesh.setMatrixAt(i, zeroMatrix); continue; }
 
       pVel[i].addScaledVector(PART_GRAVITY, dt);
       pVel[i].multiplyScalar(Math.pow(PART_DRAG, dt * 60));
       pPos[i].addScaledVector(pVel[i], dt);
+      pSpin[i] += dt * 10;
 
       toCam.copy(camera.position).sub(pPos[i]).normalize();
-      qBill.setFromUnitVectors(Z, toCam);
-      pSpin[i] += dt * 8.0;
-      qSpin.setFromAxisAngle(toCam, pSpin[i]);
-      q.multiplyQuaternions(qBill, qSpin);
+      q.setFromUnitVectors(Z, toCam);
+      q.multiply(new THREE.Quaternion().setFromAxisAngle(toCam, pSpin[i]));
 
-      m.compose(pPos[i], q, new THREE.Vector3(1, 1, 1));
+      const life = pTTL[i] / PART_TTL;
+      const sc   = life * 0.09;
+      m.compose(pPos[i], q, new THREE.Vector3(sc, sc, sc));
       partMesh.setMatrixAt(i, m);
-
       pTTL[i] -= dt;
     }
-    if (anyAlive) partMesh.instanceMatrix.needsUpdate = true;
-    partMat.opacity = 0.25 + 0.7 * (anyAlive ? 1 : 0);
+    partMesh.instanceMatrix.needsUpdate = true;
   }
 
-  // ====== DEBUG: marqueur de hit ======
-  const debugSpheres = [];
-  function spawnDebugMarker(p, ttl = 0.5) {
-    if (!DEBUG_HITS) return;
-    const g = new THREE.SphereGeometry(0.01, 8, 8);
-    const m = new THREE.MeshBasicMaterial({ color: 0x00ff88, depthTest: false, toneMapped: false });
-    const s = new THREE.Mesh(g, m);
-    s.position.copy(p);
-    s.renderOrder = 3000;
-    scene.add(s);
-    debugSpheres.push({ s, ttl });
+  // ====== ONOMATOPOEIA ======
+  const WORDS  = ['POW!', 'BAM!', 'SMACK!', 'WHAM!', 'KA-POW!', 'BOUM!', 'CRACK!'];
+  const COLORS = ['#FFE500', '#FF4400', '#00EEFF', '#FF00BB', '#44FF22', '#FF8800'];
+
+  function makeOnomaSprite(word) {
+    const col  = COLORS[Math.floor(Math.random() * COLORS.length)];
+    const c    = document.createElement('canvas');
+    c.width = 512; c.height = 256;
+    const g    = c.getContext('2d');
+    const size = Math.min(160, Math.floor(560 / word.length));
+    g.font      = `bold ${size}px Impact, Arial Black, sans-serif`;
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineJoin  = 'round';
+    g.strokeStyle = '#000'; g.lineWidth = 18; g.strokeText(word, 256, 128);
+    g.fillStyle   = col;                      g.fillText(word, 256, 128);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return new THREE.Sprite(new THREE.SpriteMaterial({
+      map: tex, depthTest: false, transparent: true, toneMapped: false,
+    }));
   }
-  function updateDebug(dt) {
-    for (let i = debugSpheres.length - 1; i >= 0; i--) {
-      const d = debugSpheres[i];
-      d.ttl -= dt;
-      if (d.ttl <= 0) {
-        d.s.parent?.remove(d.s);
-        debugSpheres.splice(i, 1);
-        d.s.geometry.dispose();
-        d.s.material.dispose();
+
+  const onomaList = [];
+
+  function spawnOnoma(pt, normal) {
+    const word   = WORDS[Math.floor(Math.random() * WORDS.length)];
+    const sprite = makeOnomaSprite(word);
+    sprite.position.copy(pt)
+      .addScaledVector(normal, 0.25 + Math.random() * 0.2)
+      .add(new THREE.Vector3((Math.random() - 0.5) * 0.5, 0.15 + Math.random() * 0.25, 0));
+    sprite.scale.set(0.01, 0.005, 1);
+    sprite.renderOrder = 3000;
+    scene.add(sprite);
+    onomaList.push({ sprite, ttl: 0.85, maxTtl: 0.85 });
+  }
+
+  function updateOnoma(dt) {
+    for (let i = onomaList.length - 1; i >= 0; i--) {
+      const o    = onomaList[i];
+      o.ttl     -= dt;
+      const life = Math.max(0, o.ttl) / o.maxTtl;
+
+      // Pop in quickly, hold, then fade out
+      let sc;
+      if (life > 0.65) {
+        const t = 1 - (life - 0.65) / 0.35;
+        sc = easeOutBack(t) * 0.85;
+      } else {
+        sc = 0.85;
+        o.sprite.material.opacity = life / 0.65;
+      }
+      o.sprite.scale.set(sc, sc * 0.5, 1);
+
+      if (o.ttl <= 0) {
+        o.sprite.parent?.remove(o.sprite);
+        o.sprite.material.map?.dispose();
+        o.sprite.material.dispose();
+        onomaList.splice(i, 1);
       }
     }
   }
 
-  // ====== HUD SCORE ======
+  function easeOutBack(t) {
+    const c1 = 1.70158, c3 = c1 + 1;
+    return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+  }
+
+  // ====== SQUASH & STRETCH ======
+  function triggerSquash(hitNormal) {
+    headScaleVel = -22.0;
+    headRecoilVel.copy(hitNormal).multiplyScalar(-0.35);
+  }
+
+  function updateHeadSpring(dt) {
+    if (!headRoot) return;
+
+    // Scale spring (uniform squash)
+    const sAcc = (HEAD_BASE_SCALE - headScaleCur) * SPRING_K - headScaleVel * SPRING_D;
+    headScaleVel += sAcc * dt;
+    headScaleCur += headScaleVel * dt;
+    headRoot.scale.setScalar(headScaleCur);
+
+    // Position recoil spring
+    const rAcc = headRecoilPos.clone().multiplyScalar(-RECOIL_K)
+                   .addScaledVector(headRecoilVel, -RECOIL_D);
+    headRecoilVel.addScaledVector(rAcc, dt);
+    headRecoilPos.addScaledVector(headRecoilVel, dt);
+    headRoot.position.set(0, 0.55, -0.25).add(headRecoilPos);
+  }
+
+  // ====== HUD ======
   let hitsCount = 0;
   const hud = document.createElement('div');
-  hud.style.position = 'fixed';
-  hud.style.left = '50%';
-  hud.style.top = '2vh';
-  hud.style.transform = 'translateX(-50%)';
-  hud.style.padding = '6px 10px';
-  hud.style.background = 'rgba(0,0,0,0.35)';
-  hud.style.color = '#fff';
-  hud.style.fontFamily = 'system-ui, sans-serif';
-  hud.style.fontSize = '14px';
-  hud.style.borderRadius = '8px';
-  hud.style.userSelect = 'none';
-  hud.textContent = 'Coups: 0';
+  Object.assign(hud.style, {
+    position: 'fixed', left: '50%', top: '2vh',
+    transform: 'translateX(-50%)',
+    padding: '6px 18px',
+    background: '#111',
+    color: '#FFE500',
+    fontFamily: 'Impact, Arial Black, sans-serif',
+    fontSize: '26px',
+    border: '4px solid #FFE500',
+    borderRadius: '3px',
+    userSelect: 'none',
+    letterSpacing: '3px',
+    textShadow: '2px 2px 0 #000',
+  });
+  hud.textContent = 'COUPS: 0';
   document.body.appendChild(hud);
 
-  // ====== ACTION PUNCH ======
+  // ====== PUNCH ======
   function punchAt(clientX, clientY) {
     if (!faceMesh) return;
-
-    ndc.x = (clientX / window.innerWidth) * 2 - 1;
-    ndc.y = -(clientY / window.innerHeight) * 2 + 1;
+    ndc.x = (clientX / innerWidth)  *  2 - 1;
+    ndc.y = (clientY / innerHeight) * -2 + 1;
     raycaster.setFromCamera(ndc, camera);
     const hit = raycaster.intersectObject(faceMesh, true)[0];
     if (!hit) return;
 
-    const worldNormal = hit.face
+    const n = hit.face
       ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
-      : new THREE.Vector3(0, 1, 0);
+      : new THREE.Vector3(0, 0, 1);
 
-    // Marqueur debug
-    spawnDebugMarker(hit.point);
+    spawnDecal(hit.point, n);
+    spawnParticles(hit.point, n, PARTS_PER_HIT);
+    spawnOnoma(hit.point, n);
+    triggerSquash(n);
 
-    // Décal world-space (toujours visible)
-    spawnDecal(hit.point, worldNormal, DECAL_RADIUS_WORLD);
+    // Camera shake
+    camera.position.add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.07,
+      (Math.random() - 0.5) * 0.04,
+      (Math.random() - 0.5) * 0.04,
+    ));
+    if (navigator.vibrate) navigator.vibrate(18);
 
-    // Particules
-    spawnImpactParticles(hit.point, worldNormal, PARTS_PER_HIT);
-
-    // Shake + haptics
-    camera.position.addScaledVector(
-      new THREE.Vector3((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.05),
-      1
-    );
-    if (navigator.vibrate) navigator.vibrate(12);
-
-    try { window.rnbo?.messRNBO?.('punch', 1); } catch (e) {}
-
-    hitsCount++; hud.textContent = `Coups: ${hitsCount}`;
+    hitsCount++;
+    hud.textContent = `COUPS: ${hitsCount}`;
   }
 
-  // ====== INPUTS ======
+  // ====== INPUT ======
   let isPunching = false;
   const activeTouches = new Map();
 
+  function tryHit(clientX, clientY) {
+    ndc.x = (clientX / innerWidth)  *  2 - 1;
+    ndc.y = (clientY / innerHeight) * -2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    return faceMesh ? raycaster.intersectObject(faceMesh, true).length > 0 : false;
+  }
+
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'touch') {
-      activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      if (activeTouches.size >= 2) {
-        isPunching = false;
-        controls.enabled = true;
-      } else {
-        ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
-        ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(ndc, camera);
-        const hit = faceMesh ? raycaster.intersectObject(faceMesh, true) : [];
-        if (hit.length) {
-          isPunching = true;
-          controls.enabled = false;
-          punchAt(e.clientX, e.clientY);
-        } else {
-          isPunching = false;
-          controls.enabled = true;
-        }
-      }
+      activeTouches.set(e.pointerId, true);
+      if (activeTouches.size >= 2) { isPunching = false; controls.enabled = true; return; }
     } else {
-      ndc.x = (e.clientX / window.innerWidth) * 2 - 1;
-      ndc.y = -(e.clientY / window.innerHeight) * 2 + 1;
-      raycaster.setFromCamera(ndc, camera);
-      const hit = faceMesh ? raycaster.intersectObject(faceMesh, true) : [];
-      if (hit.length) {
-        isPunching = true;
-        controls.enabled = false;
-        punchAt(e.clientX, e.clientY);
-      } else {
-        isPunching = false;
-        controls.enabled = true;
-      }
       renderer.domElement.setPointerCapture(e.pointerId);
+    }
+    if (tryHit(e.clientX, e.clientY)) {
+      isPunching = true; controls.enabled = false; punchAt(e.clientX, e.clientY);
+    } else {
+      isPunching = false; controls.enabled = true;
     }
   });
 
   renderer.domElement.addEventListener('pointermove', (e) => {
-    if (e.pointerType === 'touch') {
-      if (activeTouches.has(e.pointerId)) {
-        activeTouches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-      }
-      if (activeTouches.size >= 2) {
-        isPunching = false;
-        controls.enabled = true;
-      } else if (isPunching) {
-        punchAt(e.clientX, e.clientY);
-      }
-    } else {
-      if (isPunching) punchAt(e.clientX, e.clientY);
-    }
+    if (e.pointerType === 'touch' && activeTouches.size >= 2) return;
+    if (isPunching) punchAt(e.clientX, e.clientY);
   });
 
-  function endTouch(e) {
+  function endPointer(e) {
     if (e.pointerType === 'touch') {
       activeTouches.delete(e.pointerId);
-      if (activeTouches.size === 0) {
-        isPunching = false;
-        controls.enabled = true;
-      }
+      if (activeTouches.size === 0) { isPunching = false; controls.enabled = true; }
     } else {
-      isPunching = false;
-      controls.enabled = true;
+      isPunching = false; controls.enabled = true;
       renderer.domElement.releasePointerCapture(e.pointerId);
     }
   }
-  renderer.domElement.addEventListener('pointerup', endTouch);
-  renderer.domElement.addEventListener('pointercancel', endTouch);
-  renderer.domElement.addEventListener('pointerleave', endTouch);
+  renderer.domElement.addEventListener('pointerup',     endPointer);
+  renderer.domElement.addEventListener('pointercancel', endPointer);
+  renderer.domElement.addEventListener('pointerleave',  endPointer);
 
-  // ====== RESIZE ======
   window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(innerWidth, innerHeight);
   });
 
   // ====== LOOP ======
   let last = performance.now();
   function animate() {
     requestAnimationFrame(animate);
-    const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
-    last = now;
+    const dt = Math.min(0.05, (performance.now() - last) / 1000);
+    last = performance.now();
 
     controls.update();
+    updateHeadSpring(dt);
     updateParticles(dt);
     updateDecals(dt);
-    updateDebug(dt);
-
+    updateOnoma(dt);
     renderer.render(scene, camera);
   }
   animate();
+
 })();
