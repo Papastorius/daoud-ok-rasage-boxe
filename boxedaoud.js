@@ -2,6 +2,27 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+// ====== ON-SCREEN STATUS (debug mobile) ======
+const statusEl = document.createElement('div');
+Object.assign(statusEl.style, {
+  position: 'fixed', top: '0', left: '0', right: '0',
+  background: 'rgba(0,0,0,0.75)', color: '#0f0',
+  fontFamily: 'monospace', fontSize: '13px',
+  padding: '6px 10px', zIndex: '99999',
+  pointerEvents: 'none', whiteSpace: 'pre-wrap',
+});
+document.body.appendChild(statusEl);
+function log(msg) { statusEl.textContent += msg + '\n'; }
+function logErr(msg) {
+  statusEl.style.background = 'rgba(180,0,0,0.9)';
+  statusEl.style.color = '#fff';
+  statusEl.textContent += '❌ ' + msg + '\n';
+}
+window.addEventListener('error',         e => logErr(e.message));
+window.addEventListener('unhandledrejection', e => logErr(String(e.reason)));
+
+log('THREE version: ' + THREE.REVISION);
+
 (async function () {
 
   // ====== PARAMS ======
@@ -38,11 +59,13 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.1, 3.8);
 
+  log('Init renderer...');
   const renderer = new THREE.WebGPURenderer({ antialias: true });
   await renderer.init();
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
+  log('Renderer OK');
 
   // Cartoon lighting
   scene.add(new THREE.AmbientLight(0xffffff, 0.12));
@@ -64,9 +87,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   let faceMesh = null;
   let headRoot = null;
 
+  log('Loading GLB...');
   new GLTFLoader().load('./assets/head_expressions.glb', (gltf) => {
+    log('GLB loaded');
     const headSrc = gltf.scene.getObjectByName('soldier_head');
-    if (!headSrc) { console.error('soldier_head introuvable'); return; }
+    if (!headSrc) { logErr('soldier_head introuvable'); return; }
 
     headRoot = new THREE.Group();
     headRoot.position.set(0, 0.55, -0.25);
@@ -96,12 +121,13 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
       n.add(outline);
     });
 
-    if (!faceMesh) { console.error('Aucun mesh dans soldier_head'); return; }
+    if (!faceMesh) { logErr('Aucun mesh dans soldier_head'); return; }
+    log('Head ready ✓');
     const wp = new THREE.Vector3();
     faceMesh.getWorldPosition(wp);
     controls.target.copy(wp);
     controls.update();
-  }, null, (e) => console.error('GLTF:', e));
+  }, null, (e) => logErr('GLTF: ' + e));
 
   // ====== DECAL TEXTURE (cartoon blood) ======
   function makeDecalTex(size = 256) {
