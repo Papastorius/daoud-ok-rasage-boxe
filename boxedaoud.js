@@ -87,22 +87,43 @@ log('THREE version: ' + THREE.REVISION);
   let faceMesh = null;
   let headRoot = null;
 
+  // Iterative BFS — replaces all recursive traverse/getObjectByName to avoid stack overflow
+  function findByName(root, name) {
+    const q = [root];
+    while (q.length) {
+      const o = q.shift();
+      if (o.name === name) return o;
+      for (let i = 0; i < o.children.length; i++) q.push(o.children[i]);
+    }
+    return null;
+  }
+
+  function collectMeshes(root) {
+    const meshes = [];
+    const q = [root];
+    while (q.length) {
+      const o = q.shift();
+      if (o.isMesh) meshes.push(o);
+      for (let i = 0; i < o.children.length; i++) q.push(o.children[i]);
+    }
+    return meshes;
+  }
+
   log('Loading GLB...');
   new GLTFLoader().load('./assets/head_expressions.glb', (gltf) => {
     log('GLB loaded');
-    const headSrc = gltf.scene.getObjectByName('soldier_head');
-    if (!headSrc) { logErr('soldier_head introuvable'); return; }
+
+    const headSrc = findByName(gltf.scene, 'soldier_head') ?? gltf.scene;
+    log('headSrc: ' + headSrc.name);
 
     headRoot = new THREE.Group();
     headRoot.position.set(0, 0.55, -0.25);
     headRoot.scale.setScalar(HEAD_BASE_SCALE);
     scene.add(headRoot);
-
     headRoot.add(headSrc);
 
-    // Collect meshes first, THEN modify — prevents traverse visiting newly added outline meshes
-    const meshes = [];
-    headSrc.traverse(n => { if (n.isMesh) meshes.push(n); });
+    const meshes = collectMeshes(headSrc);
+    log('meshes found: ' + meshes.length);
 
     for (const n of meshes) {
       if (!faceMesh) faceMesh = n;
@@ -122,7 +143,7 @@ log('THREE version: ' + THREE.REVISION);
       n.add(outline);
     }
 
-    if (!faceMesh) { logErr('Aucun mesh dans soldier_head'); return; }
+    if (!faceMesh) { logErr('Aucun mesh trouvé'); return; }
     log('Head ready ✓');
     const wp = new THREE.Vector3();
     faceMesh.getWorldPosition(wp);
