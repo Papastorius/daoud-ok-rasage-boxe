@@ -100,8 +100,11 @@ log('THREE version: ' + THREE.REVISION);
 
     headRoot.add(headSrc);
 
-    headSrc.traverse(n => {
-      if (!n.isMesh) return;
+    // Collect meshes first, THEN modify — prevents traverse visiting newly added outline meshes
+    const meshes = [];
+    headSrc.traverse(n => { if (n.isMesh) meshes.push(n); });
+
+    for (const n of meshes) {
       if (!faceMesh) faceMesh = n;
 
       const srcMat = Array.isArray(n.material) ? n.material[0] : n.material;
@@ -110,7 +113,6 @@ log('THREE version: ' + THREE.REVISION);
         map:   srcMat?.map   ?? null,
       });
 
-      // Black outline via inverted hull
       const outline = new THREE.Mesh(
         n.geometry,
         new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.BackSide })
@@ -118,7 +120,7 @@ log('THREE version: ' + THREE.REVISION);
       outline.scale.setScalar(1.045);
       outline.renderOrder = -1;
       n.add(outline);
-    });
+    }
 
     if (!faceMesh) { logErr('Aucun mesh dans soldier_head'); return; }
     log('Head ready ✓');
