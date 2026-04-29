@@ -98,10 +98,9 @@ log('THREE version: ' + THREE.REVISION);
     headRoot.scale.setScalar(HEAD_BASE_SCALE);
     scene.add(headRoot);
 
-    const headClone = headSrc.clone(true);
-    headRoot.add(headClone);
+    headRoot.add(headSrc);
 
-    headClone.traverse(n => {
+    headSrc.traverse(n => {
       if (!n.isMesh) return;
       if (!faceMesh) faceMesh = n;
 
