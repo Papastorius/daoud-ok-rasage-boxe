@@ -219,10 +219,10 @@ function logErr() {}
   }
 
   // ====== PARTICLES (stars) ======
-  const partGeo  = new THREE.PlaneGeometry(0.09, 0.09);
+  const partGeo  = new THREE.PlaneGeometry(1, 1);
   const partMat  = new THREE.MeshBasicMaterial({
     map: makeStarTex(), transparent: true, opacity: 1,
-    depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.05, toneMapped: false,
+    depthTest: false, depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.05, toneMapped: false,
   });
   const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
   const partMesh   = new THREE.InstancedMesh(partGeo, partMat, MAX_PARTS);
@@ -270,7 +270,7 @@ function logErr() {}
       q.multiply(new THREE.Quaternion().setFromAxisAngle(toCam, pSpin[i]));
 
       const life = pTTL[i] / PART_TTL;
-      const sc   = life * 0.09;
+      const sc   = life * 0.18;
       m.compose(pPos[i], q, new THREE.Vector3(sc, sc, sc));
       partMesh.setMatrixAt(i, m);
       pTTL[i] -= dt;
