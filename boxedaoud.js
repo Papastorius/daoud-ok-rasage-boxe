@@ -369,7 +369,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   }
 
   // ====== RHYTHM ENGINE ======
-  const BPM           = 100;                 // ← change to match your track
+  const BPM           = 86;                  // DAOUD - ok
   const BEAT_OFFSET   = 0.0;                // ← delay (s) before 1st beat in song
   const BEAT_INTERVAL = 60 / BPM;
   const LOOK_AHEAD    = 0.9;                 // seconds: ring spawns this early
