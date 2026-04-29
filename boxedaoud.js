@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-(async function () {
+(function () {
 
   // ====== PARAMS ======
   const DECAL_RADIUS  = 0.18;
@@ -38,8 +38,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.1, 3.8);
 
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
-  await renderer.init();
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
