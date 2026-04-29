@@ -218,64 +218,58 @@ function logErr() {}
     return t;
   }
 
-  // ====== PARTICLES (stars) ======
-  const partGeo  = new THREE.PlaneGeometry(1, 1);
-  const partMat  = new THREE.MeshBasicMaterial({
-    map: makeStarTex(), transparent: true, opacity: 1,
-    depthTest: false, depthWrite: false, side: THREE.DoubleSide, alphaTest: 0.05, toneMapped: false,
-  });
-  const zeroMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
-  const partMesh   = new THREE.InstancedMesh(partGeo, partMat, MAX_PARTS);
-  partMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  for (let i = 0; i < MAX_PARTS; i++) partMesh.setMatrixAt(i, zeroMatrix);
-  partMesh.instanceMatrix.needsUpdate = true;
-  scene.add(partMesh);
+  // ====== PARTICLES (stars via Sprites — InstancedMesh unreliable on WebGPU) ======
+  const starTex    = makeStarTex();
+  const starPool   = [];   // reusable sprites
+  const activeParts = [];  // { sprite, vel, ttl }
 
-  const pPos    = Array.from({ length: MAX_PARTS }, () => new THREE.Vector3());
-  const pVel    = Array.from({ length: MAX_PARTS }, () => new THREE.Vector3());
-  const pSpin   = new Float32Array(MAX_PARTS);
-  const pTTL    = new Float32Array(MAX_PARTS);
-  let   pCursor = 0;
+  function getStarSprite() {
+    if (starPool.length > 0) {
+      const s = starPool.pop();
+      s.material.opacity = 1;
+      return s;
+    }
+    return new THREE.Sprite(new THREE.SpriteMaterial({
+      map: starTex, depthTest: false, transparent: true, toneMapped: false,
+    }));
+  }
 
   function spawnParticles(pt, normal, count) {
     const n = normal.clone().normalize();
     for (let i = 0; i < count; i++) {
-      const idx = pCursor++ % MAX_PARTS;
-      pPos[idx].copy(pt).addScaledVector(n, 0.02);
+      const sprite = getStarSprite();
+      sprite.position.copy(pt).addScaledVector(n, 0.05);
+      sprite.scale.setScalar(0.2);
+      sprite.renderOrder = 2500;
+      scene.add(sprite);
+
       const rand    = new THREE.Vector3().randomDirection();
       const tangent = rand.sub(n.clone().multiplyScalar(rand.dot(n))).normalize();
       const speed   = THREE.MathUtils.lerp(PART_SPEED_MIN, PART_SPEED_MAX, Math.random());
-      pVel[idx].copy(n).multiplyScalar(speed * 0.45).addScaledVector(tangent, speed);
-      pSpin[idx] = Math.random() * Math.PI * 2;
-      pTTL[idx]  = PART_TTL;
+      const vel     = n.clone().multiplyScalar(speed * 0.45).addScaledVector(tangent, speed);
+
+      activeParts.push({ sprite, vel, ttl: PART_TTL });
     }
   }
 
   function updateParticles(dt) {
-    const m    = new THREE.Matrix4();
-    const q    = new THREE.Quaternion();
-    const Z    = new THREE.Vector3(0, 0, 1);
-    const toCam = new THREE.Vector3();
+    for (let i = activeParts.length - 1; i >= 0; i--) {
+      const p = activeParts[i];
+      p.vel.addScaledVector(PART_GRAVITY, dt);
+      p.vel.multiplyScalar(Math.pow(PART_DRAG, dt * 60));
+      p.sprite.position.addScaledVector(p.vel, dt);
 
-    for (let i = 0; i < MAX_PARTS; i++) {
-      if (pTTL[i] <= 0) { partMesh.setMatrixAt(i, zeroMatrix); continue; }
+      const life = p.ttl / PART_TTL;
+      p.sprite.scale.setScalar(life * 0.2);
+      p.sprite.material.opacity = life;
+      p.ttl -= dt;
 
-      pVel[i].addScaledVector(PART_GRAVITY, dt);
-      pVel[i].multiplyScalar(Math.pow(PART_DRAG, dt * 60));
-      pPos[i].addScaledVector(pVel[i], dt);
-      pSpin[i] += dt * 10;
-
-      toCam.copy(camera.position).sub(pPos[i]).normalize();
-      q.setFromUnitVectors(Z, toCam);
-      q.multiply(new THREE.Quaternion().setFromAxisAngle(toCam, pSpin[i]));
-
-      const life = pTTL[i] / PART_TTL;
-      const sc   = life * 0.18;
-      m.compose(pPos[i], q, new THREE.Vector3(sc, sc, sc));
-      partMesh.setMatrixAt(i, m);
-      pTTL[i] -= dt;
+      if (p.ttl <= 0) {
+        scene.remove(p.sprite);
+        starPool.push(p.sprite);
+        activeParts.splice(i, 1);
+      }
     }
-    partMesh.instanceMatrix.needsUpdate = true;
   }
 
   // ====== ONOMATOPOEIA ======
