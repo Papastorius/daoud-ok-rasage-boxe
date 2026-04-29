@@ -600,6 +600,118 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     }
   }
 
+  // ====== PHASE 4: AUTO MODE + INTRO + POLISH ======
+
+  // --- Random surface point on faceMesh ---
+  function randomFacePoint() {
+    if (!faceMesh) return null;
+    faceMesh.updateWorldMatrix(true, false);
+    const pos  = faceMesh.geometry.attributes.position;
+    const norm = faceMesh.geometry.attributes.normal;
+    const idx  = Math.floor(Math.random() * pos.count);
+    const p    = new THREE.Vector3(pos.getX(idx),  pos.getY(idx),  pos.getZ(idx));
+    const n    = new THREE.Vector3(norm.getX(idx), norm.getY(idx), norm.getZ(idx));
+    p.applyMatrix4(faceMesh.matrixWorld);
+    n.transformDirection(faceMesh.matrixWorld).normalize();
+    return { point: p, normal: n };
+  }
+
+  // --- Auto mode state ---
+  let autoMode     = false;
+  let autoCamAngle = 0;
+
+  function autoFirePunch() {
+    const r = randomFacePoint();
+    if (!r) return;
+    const { point, normal } = r;
+    spawnDecal(point, normal);
+    spawnParticles(point, normal, PARTS_PER_HIT);
+    spawnOnoma(point, normal);
+    triggerSquash(normal);
+    camera.position.add(new THREE.Vector3(
+      (Math.random() - 0.5) * 0.07,
+      (Math.random() - 0.5) * 0.04,
+      (Math.random() - 0.5) * 0.04,
+    ));
+    if (navigator.vibrate) navigator.vibrate(18);
+    combo++;
+    maxCombo = Math.max(maxCombo, combo);
+    score += 300 * Math.min(combo, 4);
+    showJudgment('PERFECT!', '#FFE500');
+    updateScoreHUD();
+  }
+
+  function processAutoPunches() {
+    if (!autoMode || !rhythmOn || !faceMesh) return;
+    const now = audioCtx.currentTime;
+    for (const b of beats) {
+      if (!b.autoDone && Math.abs(b.time - now) < 0.055) {
+        b.autoDone = true;
+        b.state    = 'hit';
+        if (Math.random() < 0.88) autoFirePunch();  // 88% of beats get a punch
+      }
+    }
+  }
+
+  function updateAutoCamera(dt) {
+    if (!autoMode || !controls.target) return;
+    autoCamAngle += dt * 0.18;
+    const t = controls.target;
+    const r = 3.6 + Math.sin(autoCamAngle * 0.3) * 0.4;
+    camera.position.set(
+      t.x + Math.sin(autoCamAngle) * r,
+      t.y + 0.25 + Math.sin(autoCamAngle * 0.45) * 0.3,
+      t.z + Math.cos(autoCamAngle) * r,
+    );
+    camera.lookAt(t);
+  }
+
+  // --- Mode toggle button ---
+  const modeBtn = document.createElement('button');
+  Object.assign(modeBtn.style, {
+    position: 'fixed', bottom: '3vh', right: '3vw',
+    fontFamily: 'Impact, Arial Black, sans-serif',
+    fontSize: '14px', letterSpacing: '2px',
+    color: '#FFE500', background: '#111',
+    border: '3px solid #FFE500', borderRadius: '3px',
+    padding: '7px 14px', cursor: 'pointer', zIndex: '5000',
+  });
+  modeBtn.textContent = 'AUTO';
+  modeBtn.addEventListener('click', () => {
+    autoMode = !autoMode;
+    modeBtn.textContent   = autoMode ? 'MANUEL' : 'AUTO';
+    modeBtn.style.background = autoMode ? '#FFE500' : '#111';
+    modeBtn.style.color      = autoMode ? '#111'    : '#FFE500';
+    controls.enabled         = !autoMode;
+    if (autoMode && !rhythmOn) startRhythm();
+  });
+  document.body.appendChild(modeBtn);
+
+  // --- Intro screen ---
+  const introEl = document.createElement('div');
+  Object.assign(introEl.style, {
+    position: 'fixed', inset: '0',
+    background: '#000',
+    display: 'flex', flexDirection: 'column',
+    alignItems: 'center', justifyContent: 'center',
+    zIndex: '9999', transition: 'opacity 1.2s',
+    pointerEvents: 'none',
+  });
+  introEl.innerHTML = `
+    <div style="font-family:Impact,Arial Black,sans-serif;color:#FFE500;
+                font-size:56px;letter-spacing:10px;text-shadow:0 0 40px #FFE500">DAOUD</div>
+    <div style="font-family:Impact,Arial Black,sans-serif;color:#fff;
+                font-size:24px;letter-spacing:6px;margin-top:6px">OK</div>
+    <div style="font-family:Arial,sans-serif;color:#555;
+                font-size:13px;margin-top:48px;letter-spacing:3px">TAP TO START</div>
+  `;
+  document.body.appendChild(introEl);
+  // Fade out on first interaction
+  renderer.domElement.addEventListener('pointerdown', () => {
+    introEl.style.opacity = '0';
+    setTimeout(() => introEl.remove(), 1300);
+  }, { once: true });
+
   // ====== HUD ======
   const css = `
     position:fixed; font-family:Impact,Arial Black,sans-serif;
@@ -728,6 +840,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
     controls.update();
     scheduleBeats();
+    processAutoPunches();
     updateBeatRing();
     updateBeatReactions(dt);
     updateJudgment(dt);
@@ -736,6 +849,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     updateOrbitalStars(dt);
     updateDecals(dt);
     updateOnoma(dt);
+    updateAutoCamera(dt);
     renderer.render(scene, camera);
   }
   animate();
