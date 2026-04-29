@@ -5,6 +5,12 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 function log() {}
 function logErr() {}
 
+// Pre-fetch audio before user gesture (decoding happens later)
+const SONG_PATH = './assets/DAOUD%20-%20ok%20-%2001%20-%20dijon__16b-44k-FR9W12517721.mp3';
+let songArrayBuffer = null;
+let hasSong = false;
+fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; hasSong = true; }).catch(() => {});
+
 (async function () {
 
   // ====== PARAMS ======
@@ -364,6 +370,7 @@ function logErr() {}
 
   // ====== RHYTHM ENGINE ======
   const BPM           = 100;                 // ← change to match your track
+  const BEAT_OFFSET   = 0.0;                // ← delay (s) before 1st beat in song
   const BEAT_INTERVAL = 60 / BPM;
   const LOOK_AHEAD    = 0.9;                 // seconds: ring spawns this early
   const PERFECT_WIN   = 0.08;               // ±80 ms
@@ -377,15 +384,30 @@ function logErr() {}
   let maxCombo    = 0;
   const beats     = [];                      // {time, state:'pending'|'hit'|'missed'}
 
-  function startRhythm() {
+  async function startRhythm() {
     if (rhythmOn) return;
-    audioCtx = new AudioContext();
-    nextBeatT = audioCtx.currentTime + 0.1;
-    rhythmOn  = true;
+    rhythmOn = true;
     tapPrompt.style.display = 'none';
+    audioCtx  = new AudioContext();
+    nextBeatT = audioCtx.currentTime + 0.05;
+
+    if (hasSong && songArrayBuffer) {
+      try {
+        const buffer = await audioCtx.decodeAudioData(songArrayBuffer);
+        const src    = audioCtx.createBufferSource();
+        src.buffer   = buffer;
+        src.connect(audioCtx.destination);
+        src.start(audioCtx.currentTime);
+        nextBeatT = audioCtx.currentTime + BEAT_OFFSET;
+      } catch (e) {
+        hasSong = false;   // fallback to click metronome
+      }
+    }
   }
 
+  // Click metronome — only used when no song loaded
   function scheduleClick(t) {
+    if (hasSong) return;
     const osc  = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain); gain.connect(audioCtx.destination);
