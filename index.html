@@ -10,9 +10,16 @@
             overflow: hidden;
         }
     </style>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.webgpu.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+    </script>
 </head>
 <body>
-    <!-- Fichier JavaScript principal en tant que module -->
-    <script type = "mod=ule" src="./src/boxedaoud.js"></script>
+    <script type="module" src="./boxedaoud.js"></script>
 </body>
 </html>
