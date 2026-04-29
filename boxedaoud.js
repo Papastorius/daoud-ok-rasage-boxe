@@ -560,6 +560,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
   // Camera FOV spring (pulses on beat)
   let camFOVCur = 70, camFOVVel = 0;
+  let camTargetFOV = 70;      // updated by cinematic shot selector
   let lastBeatVizT = -999;
 
   function updateBeatReactions(dt) {
@@ -574,8 +575,8 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
       }
     }
 
-    // FOV spring
-    const fovAcc = (70 - camFOVCur) * 250 - camFOVVel * 16;
+    // FOV spring — targets shot FOV in auto mode, 70 in manual
+    const fovAcc = ((autoMode ? camTargetFOV : 70) - camFOVCur) * 250 - camFOVVel * 16;
     camFOVVel += fovAcc * dt;
     camFOVCur += camFOVVel * dt;
     camera.fov = camFOVCur;
@@ -653,6 +654,20 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   let autoMode     = false;
   let autoCamAngle = 0;
 
+  // ---- Cinematic shot sequencer ----
+  // Each shot: { dist, yOff, angleSpeed, fov, beats }
+  // angleSpeed=0 → camera parks at current angle (slow drift only)
+  const CINEMATIC_SHOTS = [
+    { dist: 3.6, yOff:  0.25, angleSpeed: 0.18, fov: 70, beats: 8  }, // orbit
+    { dist: 1.7, yOff:  0.05, angleSpeed: 0.06, fov: 52, beats: 4  }, // closeup
+    { dist: 3.0, yOff: -0.18, angleSpeed: 0.02, fov: 66, beats: 6  }, // side / parked
+    { dist: 2.4, yOff: -0.55, angleSpeed: 0.10, fov: 84, beats: 4  }, // low angle
+    { dist: 5.0, yOff:  0.65, angleSpeed: 0.14, fov: 58, beats: 4  }, // pull-back
+  ];
+  let camShotIdx       = 0;
+  let camShotBeatsLeft = CINEMATIC_SHOTS[0].beats;
+  const camWantPos     = new THREE.Vector3();
+
   function autoFirePunch() {
     const r = randomFacePoint();
     if (!r) return;
@@ -688,14 +703,38 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
   function updateAutoCamera(dt) {
     if (!autoMode || !controls.target) return;
-    autoCamAngle += dt * 0.18;
     const t = controls.target;
-    const r = 3.6 + Math.sin(autoCamAngle * 0.3) * 0.4;
-    camera.position.set(
+
+    // Advance shot counter on each beat
+    if (rhythmOn) {
+      const now = audioCtx.currentTime;
+      for (const b of beats) {
+        if (!b.camDone && b.time <= now + 0.04) {
+          b.camDone = true;
+          camShotBeatsLeft--;
+          if (camShotBeatsLeft <= 0) {
+            camShotIdx = (camShotIdx + 1) % CINEMATIC_SHOTS.length;
+            camShotBeatsLeft = CINEMATIC_SHOTS[camShotIdx].beats;
+          }
+        }
+      }
+    }
+
+    const shot = CINEMATIC_SHOTS[camShotIdx];
+    camTargetFOV = shot.fov;
+    autoCamAngle += dt * shot.angleSpeed;
+
+    // Breathe: subtle sinusoidal distance variation
+    const r = shot.dist + Math.sin(autoCamAngle * 0.4) * 0.18;
+    camWantPos.set(
       t.x + Math.sin(autoCamAngle) * r,
-      t.y + 0.25 + Math.sin(autoCamAngle * 0.45) * 0.3,
+      t.y + shot.yOff + Math.sin(autoCamAngle * 0.5) * 0.1,
       t.z + Math.cos(autoCamAngle) * r,
     );
+
+    // Lerp toward target — fast on first frame of new shot (8×dt), cruising (3×dt)
+    const lerpK = camShotBeatsLeft === shot.beats ? 8 : 3;
+    camera.position.lerp(camWantPos, Math.min(1, dt * lerpK));
     camera.lookAt(t);
   }
 
@@ -712,13 +751,36 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   modeBtn.textContent = 'AUTO';
   modeBtn.addEventListener('click', () => {
     autoMode = !autoMode;
-    modeBtn.textContent   = autoMode ? 'MANUEL' : 'AUTO';
+    modeBtn.textContent      = autoMode ? 'MANUEL' : 'AUTO';
     modeBtn.style.background = autoMode ? '#FFE500' : '#111';
     modeBtn.style.color      = autoMode ? '#111'    : '#FFE500';
     controls.enabled         = !autoMode;
     if (autoMode && !rhythmOn) startRhythm();
   });
   document.body.appendChild(modeBtn);
+
+  // --- Cinema button (hides HUD for filming) ---
+  let cinemaMode = false;
+  const cinemaBtn = document.createElement('button');
+  Object.assign(cinemaBtn.style, {
+    position: 'fixed', bottom: '3vh', left: '3vw',
+    fontFamily: 'Impact, Arial Black, sans-serif',
+    fontSize: '14px', letterSpacing: '2px',
+    color: '#FFE500', background: '#111',
+    border: '3px solid #FFE500', borderRadius: '3px',
+    padding: '7px 14px', cursor: 'pointer', zIndex: '5000',
+  });
+  cinemaBtn.textContent = 'FILM';
+  cinemaBtn.addEventListener('click', () => {
+    cinemaMode = !cinemaMode;
+    // Elements to hide when filming
+    const hudEls = [scoreEl, comboEl, tapPrompt, judgEl, ringCv];
+    for (const el of hudEls) el.style.visibility = cinemaMode ? 'hidden' : '';
+    cinemaBtn.textContent      = cinemaMode ? 'HUD' : 'FILM';
+    cinemaBtn.style.background = cinemaMode ? '#FFE500' : '#111';
+    cinemaBtn.style.color      = cinemaMode ? '#111'    : '#FFE500';
+  });
+  document.body.appendChild(cinemaBtn);
 
   // --- Intro screen ---
   const introEl = document.createElement('div');
