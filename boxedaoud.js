@@ -1,6 +1,6 @@
-import * as THREE from '../build/three.webgpu.js';
-import { OrbitControls } from '../build/addons/OrbitControls.js';
-import { GLTFLoader } from '../build/addons/GLTFLoader.js';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 (async function () {
   // ====== PARAMS ======
@@ -50,7 +50,7 @@ import { GLTFLoader } from '../build/addons/GLTFLoader.js';
   const loader = new GLTFLoader();
 
   loader.load(
-    '../assets/head_expressions.glb',
+    './assets/head_expressions.glb',
     (gltf) => {
       const headSrc = gltf.scene.getObjectByName('soldier_head');
       if (!headSrc) { console.error('soldier_head introuvable'); return; }
