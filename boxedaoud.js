@@ -362,29 +362,190 @@ function logErr() {}
     headRoot.position.set(0, 0.55, -0.25).add(headRecoilPos);
   }
 
-  // ====== HUD ======
-  let hitsCount = 0;
-  const hud = document.createElement('div');
-  Object.assign(hud.style, {
-    position: 'fixed', left: '50%', top: '2vh',
-    transform: 'translateX(-50%)',
-    padding: '6px 18px',
-    background: '#111',
-    color: '#FFE500',
-    fontFamily: 'Impact, Arial Black, sans-serif',
-    fontSize: '26px',
-    border: '4px solid #FFE500',
-    borderRadius: '3px',
-    userSelect: 'none',
-    letterSpacing: '3px',
-    textShadow: '2px 2px 0 #000',
+  // ====== RHYTHM ENGINE ======
+  const BPM           = 100;                 // ← change to match your track
+  const BEAT_INTERVAL = 60 / BPM;
+  const LOOK_AHEAD    = 0.9;                 // seconds: ring spawns this early
+  const PERFECT_WIN   = 0.08;               // ±80 ms
+  const GOOD_WIN      = 0.18;               // ±180 ms
+
+  let audioCtx    = null;
+  let nextBeatT   = 0;
+  let rhythmOn    = false;
+  let score       = 0;
+  let combo       = 0;
+  let maxCombo    = 0;
+  const beats     = [];                      // {time, state:'pending'|'hit'|'missed'}
+
+  function startRhythm() {
+    if (rhythmOn) return;
+    audioCtx = new AudioContext();
+    nextBeatT = audioCtx.currentTime + 0.1;
+    rhythmOn  = true;
+    tapPrompt.style.display = 'none';
+  }
+
+  function scheduleClick(t) {
+    const osc  = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    osc.frequency.value = 900;
+    gain.gain.setValueAtTime(0.12, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.03);
+    osc.start(t); osc.stop(t + 0.04);
+  }
+
+  function scheduleBeats() {
+    if (!rhythmOn) return;
+    const horizon = audioCtx.currentTime + LOOK_AHEAD + 0.15;
+    while (nextBeatT < horizon) {
+      scheduleClick(nextBeatT);
+      beats.push({ time: nextBeatT, state: 'pending' });
+      nextBeatT += BEAT_INTERVAL;
+    }
+  }
+
+  // Beat ring (CSS overlay — reliable on all renderers)
+  const beatRing = document.createElement('div');
+  Object.assign(beatRing.style, {
+    position: 'fixed', borderRadius: '50%',
+    border: '5px solid #FFE500',
+    boxShadow: '0 0 18px #FFE500',
+    transform: 'translate(-50%, -50%)',
+    pointerEvents: 'none', zIndex: '4000',
+    opacity: '0', left: '50%', top: '44%',
   });
-  hud.textContent = 'COUPS: 0';
-  document.body.appendChild(hud);
+  document.body.appendChild(beatRing);
+
+  function updateBeatRing() {
+    if (!rhythmOn) return;
+    const now  = audioCtx.currentTime;
+    const next = beats.find(b => b.state === 'pending');
+    if (!next) { beatRing.style.opacity = '0'; return; }
+
+    const until = next.time - now;
+    if (until > LOOK_AHEAD) { beatRing.style.opacity = '0'; return; }
+
+    if (until < -(GOOD_WIN + 0.05)) {
+      if (next.state === 'pending') {
+        next.state = 'missed';
+        breakCombo();
+        showJudgment('MISS', '#ff2200');
+      }
+      beatRing.style.opacity = '0';
+      return;
+    }
+
+    const t    = Math.max(0, 1 - until / LOOK_AHEAD);   // 0→1 as beat approaches
+    const size = Math.round(220 - t * 160);              // 220px → 60px
+    const hue  = until < 0.25 ? 20 : 50;               // shifts orange near beat
+    beatRing.style.width   = size + 'px';
+    beatRing.style.height  = size + 'px';
+    beatRing.style.opacity = String(Math.min(1, t * 2));
+    beatRing.style.borderColor = `hsl(${hue},100%,55%)`;
+    beatRing.style.boxShadow   = `0 0 ${12 + t * 20}px hsl(${hue},100%,55%)`;
+  }
+
+  // Judgment
+  const judgEl = document.createElement('div');
+  Object.assign(judgEl.style, {
+    position: 'fixed', left: '50%', top: '30%',
+    transform: 'translate(-50%,-50%)',
+    fontFamily: 'Impact, Arial Black, sans-serif',
+    fontSize: '54px', letterSpacing: '4px',
+    textShadow: '3px 3px 0 #000',
+    pointerEvents: 'none', zIndex: '6000', opacity: '0',
+  });
+  document.body.appendChild(judgEl);
+  let judgTimer = 0;
+
+  function showJudgment(text, color) {
+    judgEl.textContent = text;
+    judgEl.style.color  = color;
+    judgEl.style.opacity = '1';
+    judgTimer = 0.55;
+  }
+  function updateJudgment(dt) {
+    if (judgTimer <= 0) { judgEl.style.opacity = '0'; return; }
+    judgTimer -= dt;
+    judgEl.style.opacity = String(Math.min(1, judgTimer / 0.15));
+  }
+
+  function breakCombo() {
+    combo = 0;
+    updateScoreHUD();
+  }
+
+  function judgeHit() {
+    if (!rhythmOn) return;
+    const now = audioCtx.currentTime;
+    let   best = null, bestDist = Infinity;
+    for (const b of beats) {
+      if (b.state !== 'pending') continue;
+      const d = Math.abs(b.time - now);
+      if (d < bestDist) { bestDist = d; best = b; }
+    }
+    if (!best || bestDist > GOOD_WIN) { breakCombo(); showJudgment('MISS', '#ff2200'); return; }
+    best.state = 'hit';
+    combo++;
+    maxCombo = Math.max(maxCombo, combo);
+    const mult = Math.min(combo, 4);
+    if (bestDist <= PERFECT_WIN) {
+      score += 300 * mult;
+      showJudgment('PERFECT!', '#FFE500');
+    } else {
+      score += 100 * mult;
+      showJudgment('GOOD!', '#ffffff');
+    }
+    updateScoreHUD();
+  }
+
+  // ====== HUD ======
+  const css = `
+    position:fixed; font-family:Impact,Arial Black,sans-serif;
+    color:#FFE500; text-shadow:2px 2px 0 #000; user-select:none;
+    background:#111; border:3px solid #FFE500; border-radius:3px; padding:4px 12px;
+  `;
+  const scoreEl = document.createElement('div');
+  scoreEl.style.cssText = css + 'top:2vh; left:2vw; font-size:22px;';
+  scoreEl.textContent = 'SCORE: 0';
+  document.body.appendChild(scoreEl);
+
+  const comboEl = document.createElement('div');
+  comboEl.style.cssText = css + 'top:2vh; right:2vw; font-size:22px;';
+  comboEl.textContent = 'COMBO: 0';
+  document.body.appendChild(comboEl);
+
+  const tapPrompt = document.createElement('div');
+  Object.assign(tapPrompt.style, {
+    position: 'fixed', bottom: '6vh', left: '50%',
+    transform: 'translateX(-50%)',
+    fontFamily: 'Impact, Arial Black, sans-serif',
+    fontSize: '20px', color: '#111',
+    background: '#FFE500', border: '3px solid #111',
+    padding: '8px 20px', borderRadius: '3px',
+    pointerEvents: 'none', zIndex: '5000',
+    animation: 'pulse 0.6s ease-in-out infinite alternate',
+  });
+  tapPrompt.textContent = '👊 TAPE LA TÊTE POUR COMMENCER';
+  document.body.appendChild(tapPrompt);
+
+  // Pulse animation
+  const style = document.createElement('style');
+  style.textContent = '@keyframes pulse { from{opacity:1} to{opacity:0.4} }';
+  document.head.appendChild(style);
+
+  function updateScoreHUD() {
+    scoreEl.textContent = `SCORE: ${score}`;
+    comboEl.textContent = combo > 1 ? `x${combo} COMBO` : 'COMBO: 0';
+    if (combo > 1) comboEl.style.color = combo >= 8 ? '#ff4400' : '#FFE500';
+  }
 
   // ====== PUNCH ======
   function punchAt(clientX, clientY) {
     if (!faceMesh) return;
+    startRhythm();   // starts on first punch (user gesture → AudioContext allowed)
+
     ndc.x = (clientX / innerWidth)  *  2 - 1;
     ndc.y = (clientY / innerHeight) * -2 + 1;
     raycaster.setFromCamera(ndc, camera);
@@ -395,21 +556,18 @@ function logErr() {}
       ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize()
       : new THREE.Vector3(0, 0, 1);
 
+    judgeHit();
     spawnDecal(hit.point, n);
     spawnParticles(hit.point, n, PARTS_PER_HIT);
     spawnOnoma(hit.point, n);
     triggerSquash(n);
 
-    // Camera shake
     camera.position.add(new THREE.Vector3(
       (Math.random() - 0.5) * 0.07,
       (Math.random() - 0.5) * 0.04,
       (Math.random() - 0.5) * 0.04,
     ));
     if (navigator.vibrate) navigator.vibrate(18);
-
-    hitsCount++;
-    hud.textContent = `COUPS: ${hitsCount}`;
   }
 
   // ====== INPUT ======
@@ -469,6 +627,9 @@ function logErr() {}
     last = performance.now();
 
     controls.update();
+    scheduleBeats();
+    updateBeatRing();
+    updateJudgment(dt);
     updateHeadSpring(dt);
     updateParticles(dt);
     updateDecals(dt);
