@@ -2,26 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-// ====== ON-SCREEN STATUS (debug mobile) ======
-const statusEl = document.createElement('div');
-Object.assign(statusEl.style, {
-  position: 'fixed', top: '0', left: '0', right: '0',
-  background: 'rgba(0,0,0,0.75)', color: '#0f0',
-  fontFamily: 'monospace', fontSize: '13px',
-  padding: '6px 10px', zIndex: '99999',
-  pointerEvents: 'none', whiteSpace: 'pre-wrap',
-});
-document.body.appendChild(statusEl);
-function log(msg) { statusEl.textContent += msg + '\n'; }
-function logErr(msg) {
-  statusEl.style.background = 'rgba(180,0,0,0.9)';
-  statusEl.style.color = '#fff';
-  statusEl.textContent += '❌ ' + msg + '\n';
-}
-window.addEventListener('error',         e => logErr(e.message));
-window.addEventListener('unhandledrejection', e => logErr(String(e.reason)));
-
-log('THREE version: ' + THREE.REVISION);
+function log() {}
+function logErr() {}
 
 (async function () {
 
