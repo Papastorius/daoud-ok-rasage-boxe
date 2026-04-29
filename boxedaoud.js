@@ -142,7 +142,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     m.scale.setScalar(radius * 2);
     m.renderOrder = 2000; // très après
 
-    headRoot.add(m);
+    scene.add(m);
     decals.push({ mesh: m, ttl: DECAL_TTL, baseOpacity: 1.0 });
 
     if (decals.length > MAX_DECALS) {
@@ -173,6 +173,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
   // ====== PARTICULES (billboard) ======
   const partGeom = new THREE.PlaneGeometry(0.06, 0.06);
   const partMat = new THREE.MeshBasicMaterial({
+    color: 0xcc1100,
     transparent: true,
     opacity: 0.95,
     depthWrite: false,
