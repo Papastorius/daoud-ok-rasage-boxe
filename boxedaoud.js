@@ -42,29 +42,33 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
   // ====== SCENE ======
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xffdd00);  // cartoon yellow
+  // No scene.background — body CSS halftone shows through (alpha:true renderer)
 
   const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.01, 100);
   camera.position.set(0, 1.1, 3.8);
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  const renderer = new THREE.WebGPURenderer({ antialias: true });
+  const renderer = new THREE.WebGPURenderer({ antialias: true, alpha: true });
   await renderer.init();
   renderer.setPixelRatio(dpr);
   renderer.setSize(innerWidth, innerHeight);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   document.body.appendChild(renderer.domElement);
-  renderer.domElement.style.touchAction = 'none';
+  renderer.domElement.style.cssText += 'touch-action:none;position:relative;z-index:2;';
   log('Renderer OK');
 
   // Cartoon lighting
-  scene.add(new THREE.AmbientLight(0xffffff, 0.12));
-  const sun = new THREE.DirectionalLight(0xfff5cc, 2.2);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.10));
+  const sun = new THREE.DirectionalLight(0xfff5cc, 2.4);
   sun.position.set(4, 8, 6);
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0x88aaff, 0.5);
+  const fill = new THREE.DirectionalLight(0xaaccff, 0.45);
   fill.position.set(-4, 1, -3);
   scene.add(fill);
+  // Rim light from behind — adds cartoon silhouette depth
+  const rim = new THREE.DirectionalLight(0xff8800, 0.6);
+  rim.position.set(0, -2, -6);
+  scene.add(rim);
 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
@@ -133,9 +137,12 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
 
       const outline = new THREE.Mesh(
         n.geometry,
-        new THREE.MeshBasicMaterial({ color: 0x111111, side: THREE.BackSide })
+        new THREE.MeshBasicMaterial({
+          color: 0x111111, side: THREE.BackSide,
+          polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
+        })
       );
-      outline.scale.setScalar(1.045);
+      outline.scale.setScalar(1.03);
       outline.renderOrder = -1;
       n.add(outline);
     }
@@ -574,16 +581,18 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     camera.fov = camFOVCur;
     camera.updateProjectionMatrix();
 
-    // Background: flash white on beat, then back to combo color (reuse _baseColor/_white)
+    // Flash overlay — white pulse on every beat
     const sinceBeat = now - lastBeatVizT;
-    const flash     = Math.max(0, 1 - sinceBeat / 0.1);
+    const flash     = Math.max(0, 1 - sinceBeat / 0.12);
+    flashEl.style.opacity = (flash * 0.32).toFixed(3);
 
-    if      (combo >= 12) _baseColor.setHex(0xff2200);
-    else if (combo >=  8) _baseColor.setHex(0xff6600);
-    else if (combo >=  4) _baseColor.setHex(0xffaa00);
-    else                  _baseColor.setHex(0xffdd00);
-
-    scene.background.lerpColors(_baseColor, _white, flash * 0.4);
+    // Body background shifts warmer as combo rises (only when tier changes)
+    const tier = combo >= 12 ? 3 : combo >= 8 ? 2 : combo >= 4 ? 1 : 0;
+    if (tier !== _lastComboTier) {
+      _lastComboTier = tier;
+      document.body.style.backgroundColor =
+        ['#ffe94e', '#ffcc00', '#ffaa00', '#ff7700'][tier];
+    }
   }
 
   // Orbital dazed stars
@@ -735,6 +744,27 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     introEl.style.opacity = '0';
     setTimeout(() => introEl.remove(), 1300);
   }, { once: true });
+
+  // ====== CSS OVERLAYS ======
+  // White flash on beat (above 3D canvas, below ring/HUD)
+  const flashEl = document.createElement('div');
+  Object.assign(flashEl.style, {
+    position: 'fixed', inset: '0',
+    background: '#fff', opacity: '0',
+    pointerEvents: 'none', zIndex: '3',
+  });
+  document.body.appendChild(flashEl);
+
+  // Vignette — dark radial gradient for focus/depth
+  const vignetteEl = document.createElement('div');
+  Object.assign(vignetteEl.style, {
+    position: 'fixed', inset: '0',
+    background: 'radial-gradient(ellipse at center, transparent 38%, rgba(0,0,0,0.52) 100%)',
+    pointerEvents: 'none', zIndex: '3',
+  });
+  document.body.appendChild(vignetteEl);
+
+  let _lastComboTier = -1;
 
   // ====== HUD ======
   const css = `
