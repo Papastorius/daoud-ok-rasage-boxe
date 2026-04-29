@@ -494,6 +494,7 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
   }
 
   function breakCombo() {
+    if (combo >= 4) triggerDazed();
     combo = 0;
     updateScoreHUD();
   }
@@ -520,6 +521,83 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
       showJudgment('GOOD!', '#ffffff');
     }
     updateScoreHUD();
+  }
+
+  // ====== PHASE 3: BEAT REACTIONS + ORBITAL STARS ======
+
+  // Camera FOV spring (pulses on beat)
+  let camFOVCur = 70, camFOVVel = 0;
+  let lastBeatVizT = -999;
+
+  function updateBeatReactions(dt) {
+    if (!rhythmOn) return;
+    const now = audioCtx.currentTime;
+
+    // Detect beat crossing → kick camera + background
+    for (const b of beats) {
+      if (b.time <= now + 0.02 && b.time > lastBeatVizT) {
+        lastBeatVizT = b.time;
+        camFOVVel = -10;
+      }
+    }
+
+    // FOV spring
+    const fovAcc = (70 - camFOVCur) * 250 - camFOVVel * 16;
+    camFOVVel += fovAcc * dt;
+    camFOVCur += camFOVVel * dt;
+    camera.fov = camFOVCur;
+    camera.updateProjectionMatrix();
+
+    // Background: flash white on beat, then back to combo color
+    const sinceBeat = now - lastBeatVizT;
+    const flash     = Math.max(0, 1 - sinceBeat / 0.1);
+
+    let base;
+    if      (combo >= 12) base = new THREE.Color(0xff2200);
+    else if (combo >=  8) base = new THREE.Color(0xff6600);
+    else if (combo >=  4) base = new THREE.Color(0xffaa00);
+    else                  base = new THREE.Color(0xffdd00);
+
+    scene.background.lerpColors(base, new THREE.Color(0xffffff), flash * 0.4);
+  }
+
+  // Orbital dazed stars
+  const orbitalStars = [];
+  let   dazedUntil   = -1;
+
+  function triggerDazed() {
+    dazedUntil = rhythmOn ? audioCtx.currentTime + 2.0 : performance.now() / 1000 + 2.0;
+    for (let i = 0; i < 4; i++) {
+      const sp = getStarSprite();
+      sp.scale.setScalar(0.14);
+      sp.renderOrder = 2500;
+      scene.add(sp);
+      orbitalStars.push({ sprite: sp, angle: (i / 4) * Math.PI * 2 });
+    }
+  }
+
+  function updateOrbitalStars(dt) {
+    const now  = rhythmOn ? audioCtx.currentTime : performance.now() / 1000;
+    const done = now >= dazedUntil;
+
+    if (done && orbitalStars.length > 0) {
+      for (const s of orbitalStars) { scene.remove(s.sprite); starPool.push(s.sprite); }
+      orbitalStars.length = 0;
+      return;
+    }
+
+    if (!headRoot || orbitalStars.length === 0) return;
+    const hp = new THREE.Vector3();
+    headRoot.getWorldPosition(hp);
+
+    for (const s of orbitalStars) {
+      s.angle += dt * 3.5;
+      s.sprite.position.set(
+        hp.x + Math.cos(s.angle) * 0.55,
+        hp.y + 0.35 + Math.sin(s.angle * 1.3) * 0.12,
+        hp.z + Math.sin(s.angle) * 0.25,
+      );
+    }
   }
 
   // ====== HUD ======
@@ -651,9 +729,11 @@ fetch(SONG_PATH).then(r => r.arrayBuffer()).then(b => { songArrayBuffer = b; has
     controls.update();
     scheduleBeats();
     updateBeatRing();
+    updateBeatReactions(dt);
     updateJudgment(dt);
     updateHeadSpring(dt);
     updateParticles(dt);
+    updateOrbitalStars(dt);
     updateDecals(dt);
     updateOnoma(dt);
     renderer.render(scene, camera);
